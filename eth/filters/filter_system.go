@@ -54,7 +54,9 @@ const (
 	BlocksSubscription
 	// StateSyncSubscription to listen main chain state
 	StateSyncSubscription
-	// LastIndexSubscription keeps track of the last index
+	// PendingTransactionsFullSubscription queries full tx objects for pending
+	// transactions entering the pending state
+	PendingTransactionsFullSubscription	// LastIndexSubscription keeps track of the last index
 	LastIndexSubscription
 )
 
@@ -79,6 +81,7 @@ type subscription struct {
 	logsCrit  ethereum.FilterQuery
 	logs      chan []*types.Log
 	hashes    chan []common.Hash
+	txs       chan []*types.Transaction
 	headers   chan *types.Header
 	installed chan struct{} // closed when the filter is installed
 	err       chan error    // closed when the filter is uninstalled
@@ -318,6 +321,23 @@ func (es *EventSystem) SubscribePendingTxs(hashes chan []common.Hash) *Subscript
 	return es.subscribe(sub)
 }
 
+// SubscribePendingTxs creates a subscription that writes transaction hashes for
+// transactions that enter the transaction pool.
+func (es *EventSystem) SubscribePendingTxsFull(txs chan []*types.Transaction) *Subscription {
+	sub := &subscription{
+		id:        rpc.NewID(),
+		typ:       PendingTransactionsFullSubscription,
+		created:   time.Now(),
+		logs:      make(chan []*types.Log),
+		hashes:    make(chan []common.Hash),
+		txs:       txs,
+		headers:   make(chan *types.Header),
+		installed: make(chan struct{}),
+		err:       make(chan error),
+	}
+	return es.subscribe(sub)
+}
+
 type filterIndex map[Type]map[rpc.ID]*subscription
 
 func (es *EventSystem) handleLogs(filters filterIndex, ev []*types.Log) {
@@ -355,11 +375,16 @@ func (es *EventSystem) handleRemovedLogs(filters filterIndex, ev core.RemovedLog
 
 func (es *EventSystem) handleTxsEvent(filters filterIndex, ev core.NewTxsEvent) {
 	hashes := make([]common.Hash, 0, len(ev.Txs))
+	txs := make([]*types.Transaction, 0, len(ev.Txs))
 	for _, tx := range ev.Txs {
 		hashes = append(hashes, tx.Hash())
+		txs = append(txs, tx)
 	}
 	for _, f := range filters[PendingTransactionsSubscription] {
 		f.hashes <- hashes
+	}
+	for _, f := range filters[PendingTransactionsFullSubscription] {
+		f.txs <- txs
 	}
 }
 
